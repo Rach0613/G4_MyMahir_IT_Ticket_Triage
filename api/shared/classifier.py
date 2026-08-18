@@ -9,10 +9,14 @@ from __future__ import annotations
 
 import logging
 import math
+import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
+import requests
+
 from .categories import CATEGORIES, GENERAL_ENQUIRY, confidence_from_scores, score_text
+from .config import AzureLanguageSettings, get_azure_language_settings
 
 log = logging.getLogger("tickettriage.classifier")
 
@@ -94,6 +98,126 @@ def classify_with_keywords(text: str) -> ClassificationResult:
     return _result(winner, confidence, "keyword-rules", evidence)
 
 
+def classify_with_azure(
+    text: str,
+    settings: AzureLanguageSettings | None = None,
+) -> ClassificationResult:
+    """Classify text with an Azure custom single-label deployment.
+
+    Azure returns this operation asynchronously.  Any HTTP, timeout, response,
+    label, or confidence error is deliberately raised to ``classify_ticket``,
+    which keeps ticket submission available by invoking the keyword fallback.
+    """
+    settings = settings or get_azure_language_settings()
+    if not settings.configured:
+        raise ValueError("Azure AI Language custom classification is not configured.")
+
+    submit = requests.post(
+        f"{settings.endpoint}/language/analyze-text/jobs",
+        params={"api-version": settings.api_version},
+        headers={
+            "Ocp-Apim-Subscription-Key": settings.key,
+            "Content-Type": "application/json",
+        },
+        json={
+            "displayName": "Ticket classification",
+            "analysisInput": {
+                "documents": [
+                    {"id": "1", "language": "en", "text": (text or "")[:5000]}
+                ]
+            },
+            "tasks": [
+                {
+                    "kind": "CustomSingleLabelClassification",
+                    "taskName": "TicketCategory",
+                    "parameters": {
+                        "projectName": settings.project_name,
+                        "deploymentName": settings.deployment_name,
+                    },
+                }
+            ],
+        },
+        timeout=settings.timeout_seconds,
+    )
+    submit.raise_for_status()
+
+    operation_url = (
+        submit.headers.get("operation-location")
+        or submit.headers.get("Operation-Location")
+    )
+    if not operation_url:
+        raise ValueError("Azure classification did not return an operation location.")
+
+    deadline = time.monotonic() + settings.timeout_seconds
+    payload: Mapping[str, Any] = {}
+    while time.monotonic() < deadline:
+        poll = requests.get(
+            operation_url,
+            headers={"Ocp-Apim-Subscription-Key": settings.key},
+            timeout=settings.timeout_seconds,
+        )
+        poll.raise_for_status()
+        payload = poll.json()
+        state = str(payload.get("status", "")).lower()
+
+        if state == "succeeded":
+            break
+        if state in {"failed", "cancelled"}:
+            raise ValueError(f"Azure classification job ended with status {state}.")
+
+        remaining = deadline - time.monotonic()
+        if remaining > 0:
+            time.sleep(min(0.25, remaining))
+    else:
+        raise TimeoutError("Azure classification job did not finish before the timeout.")
+
+    task_items = payload.get("tasks", {}).get("items", [])
+    if not task_items:
+        raise ValueError("Azure classification returned no task results.")
+    documents = task_items[0].get("results", {}).get("documents", [])
+    if not documents:
+        raise ValueError("Azure classification returned no document results.")
+    classes = documents[0].get("class", [])
+    if not classes:
+        raise ValueError("Azure classification returned no category prediction.")
+
+    prediction = max(
+        classes,
+        key=lambda item: float(item.get("confidenceScore", 0.0)),
+    )
+    category = prediction.get("category")
+    confidence = float(prediction.get("confidenceScore", 0.0))
+
+    if category not in CATEGORIES:
+        raise ValueError(f"Azure classification returned unknown category {category!r}.")
+    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
+        raise ValueError("Azure classification returned invalid confidence.")
+    if confidence < settings.min_confidence:
+        raise ValueError(
+            "Azure classification confidence "
+            f"{confidence:.2f} is below {settings.min_confidence:.2f}."
+        )
+
+    return _result(
+        category,
+        confidence,
+        "azure-ai-language-custom",
+        [f"model class: {category} ({confidence:.2f})"],
+    )
+
+
+def classifier_chain(
+    settings: AzureLanguageSettings | None = None,
+) -> list[str]:
+    """Report the configured cascade without making an Azure request."""
+    settings = settings or get_azure_language_settings()
+    chain = []
+    if settings.configured:
+        chain.append("azure-ai-language-custom")
+    chain.append("keyword-rules")
+    return chain
+
+
 def classify_ticket(
     title: str,
     description: str,
@@ -107,9 +231,15 @@ def classify_ticket(
     """
     text = f"{title or ''}. {description or ''}".strip()
 
-    if azure_classifier is not None:
+    provider = azure_classifier
+    if provider is None:
+        settings = get_azure_language_settings()
+        if settings.configured:
+            provider = lambda candidate: classify_with_azure(candidate, settings)
+
+    if provider is not None:
         try:
-            return _normalise_provider_result(azure_classifier(text))
+            return _normalise_provider_result(provider(text))
         except Exception as exc:  # noqa: BLE001 - fallback must keep submission available
             log.warning("Azure classifier unavailable; using keyword fallback: %s", exc)
 
