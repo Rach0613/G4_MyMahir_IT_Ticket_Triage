@@ -8,10 +8,7 @@
     "COSMOS_CONTAINER": "<your-cosmos-container-name>",
     "AZURE_LANGUAGE_ENDPOINT": "https://<your-language-resource>.cognitiveservices.azure.com",
     "AZURE_LANGUAGE_KEY": "<set-locally-or-use-a-key-vault-reference>",
-    "AZURE_LANGUAGE_PROJECT_NAME": "<your-custom-classification-project>",
-    "AZURE_LANGUAGE_DEPLOYMENT_NAME": "<your-model-deployment>",
     "AZURE_LANGUAGE_API_VERSION": "2024-11-01",
-    "AZURE_LANGUAGE_MIN_CONFIDENCE": "0.55",
     "AZURE_LANGUAGE_TIMEOUT_SECONDS": "6"
   }
 }

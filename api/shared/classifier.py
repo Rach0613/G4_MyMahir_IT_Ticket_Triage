@@ -1,15 +1,14 @@
-"""Stable ticket-classification contract with an offline fallback.
+"""Azure key-phrase ticket classification with an offline fallback.
 
-Azure AI Language can later be supplied as a callable provider.  This module
-validates the provider's result and falls back to deterministic keyword rules
-if the provider is absent, unavailable, or returns an unusable response.
+Azure AI Language extracts key phrases synchronously.  The local ontology maps
+those phrases and the original ticket text to the project's six categories.
+Any Azure/configuration failure falls back to deterministic keyword rules.
 """
 
 from __future__ import annotations
 
 import logging
 import math
-import time
 from collections.abc import Callable, Mapping
 from typing import Any
 
@@ -22,6 +21,8 @@ log = logging.getLogger("tickettriage.classifier")
 
 ClassificationResult = dict[str, Any]
 AzureClassifier = Callable[[str], Mapping[str, Any]]
+AZURE_METHOD = "azure-ai-language-keyphrase"
+KEY_PHRASE_WEIGHT = 1.5
 
 
 def _result(
@@ -102,107 +103,93 @@ def classify_with_azure(
     text: str,
     settings: AzureLanguageSettings | None = None,
 ) -> ClassificationResult:
-    """Classify text with an Azure custom single-label deployment.
+    """Extract Azure key phrases, then map them with the local ontology.
 
-    Azure returns this operation asynchronously.  Any HTTP, timeout, response,
-    label, or confidence error is deliberately raised to ``classify_ticket``,
-    which keeps ticket submission available by invoking the keyword fallback.
+    Key Phrase Extraction does not return a category or confidence score.  The
+    category and bounded heuristic confidence are therefore derived locally.
+    Errors are raised to ``classify_ticket`` so ticket creation can fall back.
     """
     settings = settings or get_azure_language_settings()
     if not settings.configured:
-        raise ValueError("Azure AI Language custom classification is not configured.")
+        raise ValueError("Azure AI Language key phrase extraction is not configured.")
 
-    submit = requests.post(
-        f"{settings.endpoint}/language/analyze-text/jobs",
+    response = requests.post(
+        f"{settings.endpoint}/language/:analyze-text",
         params={"api-version": settings.api_version},
         headers={
             "Ocp-Apim-Subscription-Key": settings.key,
             "Content-Type": "application/json",
         },
         json={
-            "displayName": "Ticket classification",
+            "kind": "KeyPhraseExtraction",
+            "parameters": {"modelVersion": "latest"},
             "analysisInput": {
                 "documents": [
                     {"id": "1", "language": "en", "text": (text or "")[:5000]}
                 ]
             },
-            "tasks": [
-                {
-                    "kind": "CustomSingleLabelClassification",
-                    "taskName": "TicketCategory",
-                    "parameters": {
-                        "projectName": settings.project_name,
-                        "deploymentName": settings.deployment_name,
-                    },
-                }
-            ],
         },
         timeout=settings.timeout_seconds,
     )
-    submit.raise_for_status()
+    response.raise_for_status()
+    payload = response.json()
+    if not isinstance(payload, Mapping):
+        raise ValueError("Azure key phrase extraction returned a non-object response.")
 
-    operation_url = (
-        submit.headers.get("operation-location")
-        or submit.headers.get("Operation-Location")
-    )
-    if not operation_url:
-        raise ValueError("Azure classification did not return an operation location.")
+    results = payload.get("results", {})
+    if not isinstance(results, Mapping):
+        raise ValueError("Azure key phrase extraction returned invalid results.")
+    if results.get("errors"):
+        raise ValueError("Azure key phrase extraction returned document errors.")
 
-    deadline = time.monotonic() + settings.timeout_seconds
-    payload: Mapping[str, Any] = {}
-    while time.monotonic() < deadline:
-        poll = requests.get(
-            operation_url,
-            headers={"Ocp-Apim-Subscription-Key": settings.key},
-            timeout=settings.timeout_seconds,
-        )
-        poll.raise_for_status()
-        payload = poll.json()
-        state = str(payload.get("status", "")).lower()
-
-        if state == "succeeded":
-            break
-        if state in {"failed", "cancelled"}:
-            raise ValueError(f"Azure classification job ended with status {state}.")
-
-        remaining = deadline - time.monotonic()
-        if remaining > 0:
-            time.sleep(min(0.25, remaining))
-    else:
-        raise TimeoutError("Azure classification job did not finish before the timeout.")
-
-    task_items = payload.get("tasks", {}).get("items", [])
-    if not task_items:
-        raise ValueError("Azure classification returned no task results.")
-    documents = task_items[0].get("results", {}).get("documents", [])
+    documents = results.get("documents", [])
     if not documents:
-        raise ValueError("Azure classification returned no document results.")
-    classes = documents[0].get("class", [])
-    if not classes:
-        raise ValueError("Azure classification returned no category prediction.")
+        raise ValueError("Azure key phrase extraction returned no document results.")
+    document = documents[0]
+    if not isinstance(document, Mapping):
+        raise ValueError("Azure key phrase extraction returned an invalid document.")
 
-    prediction = max(
-        classes,
-        key=lambda item: float(item.get("confidenceScore", 0.0)),
-    )
-    category = prediction.get("category")
-    confidence = float(prediction.get("confidenceScore", 0.0))
-
-    if category not in CATEGORIES:
-        raise ValueError(f"Azure classification returned unknown category {category!r}.")
-    if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
-        raise ValueError("Azure classification returned invalid confidence.")
-    if confidence < settings.min_confidence:
-        raise ValueError(
-            "Azure classification confidence "
-            f"{confidence:.2f} is below {settings.min_confidence:.2f}."
+    raw_phrases = document.get("keyPhrases", [])
+    if not isinstance(raw_phrases, list):
+        raise ValueError("Azure key phrase extraction returned invalid key phrases.")
+    key_phrases = list(
+        dict.fromkeys(
+            phrase.strip()
+            for phrase in raw_phrases
+            if isinstance(phrase, str) and phrase.strip()
         )
+    )
+
+    text_scores = score_text(text)
+    phrase_scores = score_text(". ".join(key_phrases))
+    combined_scores = {
+        category: float(text_scores[category]["score"])
+        + KEY_PHRASE_WEIGHT * float(phrase_scores[category]["score"])
+        for category in CATEGORIES
+    }
+    top_score = max(combined_scores.values(), default=0.0)
+    winners = [
+        category for category in CATEGORIES if combined_scores[category] == top_score
+    ]
+
+    phrase_evidence = [f"key phrase: {phrase}" for phrase in key_phrases]
+    if top_score == 0 or len(winners) != 1:
+        return _result(GENERAL_ENQUIRY, 0.35, AZURE_METHOD, phrase_evidence)
+
+    category = winners[0]
+    matched_terms = [
+        str(term)
+        for term in (
+            list(text_scores[category]["matched"])
+            + list(phrase_scores[category]["matched"])
+        )
+    ]
 
     return _result(
         category,
-        confidence,
-        "azure-ai-language-custom",
-        [f"model class: {category} ({confidence:.2f})"],
+        confidence_from_scores(combined_scores),
+        AZURE_METHOD,
+        phrase_evidence + matched_terms,
     )
 
 
@@ -213,7 +200,7 @@ def classifier_chain(
     settings = settings or get_azure_language_settings()
     chain = []
     if settings.configured:
-        chain.append("azure-ai-language-custom")
+        chain.append(AZURE_METHOD)
     chain.append("keyword-rules")
     return chain
 
@@ -223,11 +210,10 @@ def classify_ticket(
     description: str,
     azure_classifier: AzureClassifier | None = None,
 ) -> ClassificationResult:
-    """Classify a ticket, using an optional Azure provider before fallback.
+    """Classify a ticket, using Azure key phrases before keyword fallback.
 
-    The provider hook deliberately accepts and returns plain Python values.
-    Adding the Azure REST implementation later therefore will not require any
-    change to this function's result contract or to backend persistence fields.
+    The injectable provider hook keeps tests isolated and preserves the plain
+    result contract used by the backend and persistence fields.
     """
     text = f"{title or ''}. {description or ''}".strip()
 

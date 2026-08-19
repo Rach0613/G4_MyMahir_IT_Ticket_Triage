@@ -17,10 +17,7 @@ from api.shared.config import AzureLanguageSettings, get_azure_language_settings
 AZURE_ENVIRONMENT_VARIABLES = (
     "AZURE_LANGUAGE_ENDPOINT",
     "AZURE_LANGUAGE_KEY",
-    "AZURE_LANGUAGE_PROJECT_NAME",
-    "AZURE_LANGUAGE_DEPLOYMENT_NAME",
     "AZURE_LANGUAGE_API_VERSION",
-    "AZURE_LANGUAGE_MIN_CONFIDENCE",
     "AZURE_LANGUAGE_TIMEOUT_SECONDS",
 )
 
@@ -36,48 +33,24 @@ def azure_settings(**overrides):
     values = {
         "endpoint": "https://example.cognitiveservices.azure.com",
         "key": "test-key",
-        "project_name": "TicketTriage",
-        "deployment_name": "production",
         "api_version": "2024-11-01",
-        "min_confidence": 0.55,
         "timeout_seconds": 1.0,
     }
     values.update(overrides)
     return AzureLanguageSettings(**values)
 
 
-def azure_submit_response():
-    response = Mock()
-    response.headers = {
-        "operation-location": "https://example.cognitiveservices.azure.com/jobs/123"
-    }
-    response.raise_for_status.return_value = None
-    return response
-
-
-def azure_result_response(category="Facilities", confidence=0.91, status="succeeded"):
+def azure_key_phrase_response(*phrases, errors=None):
     response = Mock()
     response.raise_for_status.return_value = None
     response.json.return_value = {
-        "status": status,
-        "tasks": {
-            "items": [
-                {
-                    "results": {
-                        "documents": [
-                            {
-                                "id": "1",
-                                "class": [
-                                    {
-                                        "category": category,
-                                        "confidenceScore": confidence,
-                                    }
-                                ],
-                            }
-                        ]
-                    }
-                }
-            ]
+        "kind": "KeyPhraseExtractionResults",
+        "results": {
+            "documents": [
+                {"id": "1", "keyPhrases": list(phrases), "warnings": []}
+            ],
+            "errors": errors or [],
+            "modelVersion": "2024-11-01",
         },
     }
     return response
@@ -169,8 +142,8 @@ def test_injected_azure_provider_uses_the_same_contract():
     provider = Mock(return_value={
         "category": "Facilities",
         "confidence": 0.934,
-        "method": "azure-ai-language-custom",
-        "evidence": ["model class: Facilities"],
+        "method": "azure-ai-language-keyphrase",
+        "evidence": ["key phrase: lift problem"],
         "ignored": "provider-specific data",
     })
 
@@ -180,8 +153,8 @@ def test_injected_azure_provider_uses_the_same_contract():
     assert result == {
         "category": "Facilities",
         "confidence": 0.93,
-        "method": "azure-ai-language-custom",
-        "evidence": ["model class: Facilities"],
+        "method": "azure-ai-language-keyphrase",
+        "evidence": ["key phrase: lift problem"],
     }
 
 
@@ -209,54 +182,91 @@ def test_azure_exception_falls_back_to_keywords():
     assert result["method"] == "keyword-rules"
 
 
-def test_azure_custom_classifier_returns_model_category_and_confidence():
+def test_azure_key_phrases_are_mapped_through_the_local_ontology():
     settings = azure_settings()
 
     with patch(
         "api.shared.classifier.requests.post",
-        return_value=azure_submit_response(),
-    ) as post, patch(
-        "api.shared.classifier.requests.get",
-        return_value=azure_result_response("Facilities", 0.91),
-    ) as get:
-        result = classify_with_azure("The lift is stuck.", settings)
+        return_value=azure_key_phrase_response("broken lift", "lecture hall"),
+    ) as post:
+        result = classify_with_azure("The room is hot.", settings)
+
+    assert result["category"] == "Facilities"
+    assert result["method"] == "azure-ai-language-keyphrase"
+    assert 0.0 <= result["confidence"] <= 1.0
+    assert "key phrase: broken lift" in result["evidence"]
+    assert post.call_args.args[0].endswith("/language/:analyze-text")
+    assert post.call_args.kwargs["params"] == {"api-version": "2024-11-01"}
+    assert post.call_args.kwargs["json"] == {
+        "kind": "KeyPhraseExtraction",
+        "parameters": {"modelVersion": "latest"},
+        "analysisInput": {
+            "documents": [
+                {"id": "1", "language": "en", "text": "The room is hot."}
+            ]
+        },
+    }
+
+
+def test_azure_mapping_uses_key_phrases_that_contain_ontology_terms():
+    with patch(
+        "api.shared.classifier.requests.post",
+        return_value=azure_key_phrase_response("outstanding balance"),
+    ):
+        result = classify_with_azure("Please help with this issue.", azure_settings())
+
+    assert result["category"] == "Student Finance"
+    assert result["method"] == "azure-ai-language-keyphrase"
+    assert "outstanding balance" in result["evidence"]
+
+
+def test_azure_mapping_also_uses_the_original_ticket_text():
+    with patch(
+        "api.shared.classifier.requests.post",
+        return_value=azure_key_phrase_response("urgent issue"),
+    ):
+        result = classify_with_azure(
+            "My tuition invoice is incorrect.", azure_settings()
+        )
+
+    assert result["category"] == "Student Finance"
+    assert result["method"] == "azure-ai-language-keyphrase"
+
+
+def test_successful_unmatched_key_phrases_return_general_enquiry():
+    with patch(
+        "api.shared.classifier.requests.post",
+        return_value=azure_key_phrase_response("graduation information"),
+    ):
+        result = classify_with_azure("Where can I find details?", azure_settings())
 
     assert result == {
-        "category": "Facilities",
-        "confidence": 0.91,
-        "method": "azure-ai-language-custom",
-        "evidence": ["model class: Facilities (0.91)"],
+        "category": "General Enquiry",
+        "confidence": 0.35,
+        "method": "azure-ai-language-keyphrase",
+        "evidence": ["key phrase: graduation information"],
     }
-    assert post.call_args.kwargs["params"] == {"api-version": "2024-11-01"}
-    assert post.call_args.kwargs["json"]["tasks"][0]["parameters"] == {
-        "projectName": "TicketTriage",
-        "deploymentName": "production",
-    }
-    assert get.call_args.args[0].endswith("/jobs/123")
 
 
-def test_low_confidence_azure_prediction_is_rejected_for_fallback():
+def test_empty_key_phrase_list_still_maps_the_original_ticket_text():
     with patch(
         "api.shared.classifier.requests.post",
-        return_value=azure_submit_response(),
-    ), patch(
-        "api.shared.classifier.requests.get",
-        return_value=azure_result_response("Facilities", 0.31),
+        return_value=azure_key_phrase_response(),
     ):
-        with pytest.raises(ValueError, match="below"):
-            classify_with_azure("A vague problem", azure_settings(min_confidence=0.7))
+        result = classify_with_azure("Campus wifi is unavailable.", azure_settings())
+
+    assert result["category"] == "IT Support"
+    assert result["method"] == "azure-ai-language-keyphrase"
 
 
-def test_unknown_azure_category_is_rejected_for_fallback():
+def test_azure_document_errors_are_rejected_for_fallback():
+    error = {"id": "1", "error": {"code": "InvalidDocument", "message": "bad"}}
     with patch(
         "api.shared.classifier.requests.post",
-        return_value=azure_submit_response(),
-    ), patch(
-        "api.shared.classifier.requests.get",
-        return_value=azure_result_response("Parking Enforcement", 0.99),
+        return_value=azure_key_phrase_response(errors=[error]),
     ):
-        with pytest.raises(ValueError, match="unknown category"):
-            classify_with_azure("A parking question", azure_settings())
+        with pytest.raises(ValueError, match="document errors"):
+            classify_with_azure("A vague problem", azure_settings())
 
 
 def test_automatic_azure_failure_falls_back_without_blocking_ticket():
@@ -265,7 +275,7 @@ def test_automatic_azure_failure_falls_back_without_blocking_ticket():
         "api.shared.classifier.get_azure_language_settings",
         return_value=settings,
     ), patch(
-        "api.shared.classifier.classify_with_azure",
+        "api.shared.classifier.requests.post",
         side_effect=TimeoutError("service timeout"),
     ):
         result = classify_ticket(
@@ -279,17 +289,29 @@ def test_automatic_azure_failure_falls_back_without_blocking_ticket():
 
 def test_classifier_chain_reflects_configuration_without_network_call():
     assert classifier_chain(azure_settings()) == [
-        "azure-ai-language-custom",
+        "azure-ai-language-keyphrase",
         "keyword-rules",
     ]
     assert classifier_chain(azure_settings(key="")) == ["keyword-rules"]
 
 
 def test_language_settings_are_safe_when_numeric_values_are_invalid(monkeypatch):
-    monkeypatch.setenv("AZURE_LANGUAGE_MIN_CONFIDENCE", "not-a-number")
     monkeypatch.setenv("AZURE_LANGUAGE_TIMEOUT_SECONDS", "not-a-number")
 
     settings = get_azure_language_settings()
 
-    assert settings.min_confidence == 0.55
     assert settings.timeout_seconds == 6.0
+
+
+def test_language_configuration_only_requires_endpoint_and_key(monkeypatch):
+    monkeypatch.setenv(
+        "AZURE_LANGUAGE_ENDPOINT",
+        "https://example.cognitiveservices.azure.com/",
+    )
+    monkeypatch.setenv("AZURE_LANGUAGE_KEY", "local-test-key")
+
+    settings = get_azure_language_settings()
+
+    assert settings.configured is True
+    assert settings.endpoint == "https://example.cognitiveservices.azure.com"
+    assert settings.api_version == "2024-11-01"

@@ -63,8 +63,8 @@ def test_ticket_creation_classifies_then_saves_existing_contract(backend):
     module.classify_ticket = Mock(return_value={
         "category": "IT Support",
         "confidence": 0.94,
-        "method": "azure-ai-language-custom",
-        "evidence": ["model class: IT Support (0.94)"],
+        "method": "azure-ai-language-keyphrase",
+        "evidence": ["key phrase: campus Wi-Fi"],
     })
 
     response = module.create_ticket(ticket_request())
@@ -78,9 +78,9 @@ def test_ticket_creation_classifies_then_saves_existing_contract(backend):
     assert ticket["category"] == "IT Support"
     assert ticket["suggestedCategory"] == "IT Support"
     assert ticket["categorySource"] == "auto"
-    assert ticket["classificationMethod"] == "azure-ai-language-custom"
+    assert ticket["classificationMethod"] == "azure-ai-language-keyphrase"
     assert ticket["classificationConfidence"] == 0.94
-    assert ticket["classificationEvidence"] == ["model class: IT Support (0.94)"]
+    assert ticket["classificationEvidence"] == ["key phrase: campus Wi-Fi"]
     repository.create_ticket.assert_called_once_with(ticket)
 
 

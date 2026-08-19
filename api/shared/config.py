@@ -41,21 +41,13 @@ def _float_setting(name, default, minimum, maximum):
 class AzureLanguageSettings:
     endpoint: str
     key: str
-    project_name: str
-    deployment_name: str
     api_version: str
-    min_confidence: float
     timeout_seconds: float
 
     @property
     def configured(self) -> bool:
-        """Custom classification needs all four service/model identifiers."""
-        return bool(
-            self.endpoint
-            and self.key
-            and self.project_name
-            and self.deployment_name
-        )
+        """Key phrase extraction needs only a Language endpoint and key."""
+        return bool(self.endpoint and self.key)
 
 
 def get_azure_language_settings() -> AzureLanguageSettings:
@@ -63,12 +55,7 @@ def get_azure_language_settings() -> AzureLanguageSettings:
     return AzureLanguageSettings(
         endpoint=_clean("AZURE_LANGUAGE_ENDPOINT").rstrip("/"),
         key=_clean("AZURE_LANGUAGE_KEY"),
-        project_name=_clean("AZURE_LANGUAGE_PROJECT_NAME"),
-        deployment_name=_clean("AZURE_LANGUAGE_DEPLOYMENT_NAME"),
         api_version=_clean("AZURE_LANGUAGE_API_VERSION") or "2024-11-01",
-        min_confidence=_float_setting(
-            "AZURE_LANGUAGE_MIN_CONFIDENCE", "0.55", 0.0, 1.0
-        ),
         timeout_seconds=_float_setting(
             "AZURE_LANGUAGE_TIMEOUT_SECONDS", "6", 0.1, 30.0
         ),
