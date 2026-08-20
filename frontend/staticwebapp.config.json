@@ -1,6 +1,6 @@
 {
   "platform": {
-    "apiRuntime": "python:3.11"
+    "apiRuntime": "python:3.10"
   },
   "routes": [
     { "route": "/admin", "rewrite": "/admin.html" },

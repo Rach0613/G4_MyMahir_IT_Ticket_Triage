@@ -2,5 +2,6 @@
     "azureFunctions.deploySubpath": "api",
     "azureFunctions.projectLanguage": "Custom",
     "azureFunctions.projectRuntime": "~4",
-    "debug.internalConsoleOptions": "neverOpen"
+    "debug.internalConsoleOptions": "neverOpen",
+    "python-envs.defaultEnvManager": "ms-python.python:system"
 }
