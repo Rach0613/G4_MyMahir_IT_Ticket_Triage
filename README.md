@@ -118,14 +118,7 @@ The application will be available locally at:
 The Azure Static Web Apps emulator will serve the frontend and connect `/api` requests to the local Azure Functions backend.
 
 ## Application Flow
-
-```text
-User submits a support ticket
-        ↓
-Frontend sends request to Backend API
-        ↓
-Ticket category is suggested
-        ↓
+ 
 Ticket is stored in Azure Cosmos DB
         ↓
 Admin Dashboard retrieves tickets
