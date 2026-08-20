@@ -44,3 +44,5 @@ jobs:
         with:
           azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN_GREEN_STONE_0789B1200 }}
           action: "close"
+          # Kept for workflow-schema validation; the close action ignores build paths.
+          app_location: "./frontend"
