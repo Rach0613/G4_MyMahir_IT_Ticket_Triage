@@ -3,6 +3,7 @@ import json
 import uuid
 
 from datetime import datetime, timezone
+from shared.classifier import classifier_chain, classify_ticket
 from shared.repository import (
     create_ticket as save_ticket,
     get_all_tickets,
@@ -40,9 +41,7 @@ def health(req: func.HttpRequest) -> func.HttpResponse:
                 "storage": "Cosmos DB",
 
                 # Current ticket classification method
-                "classifierChain": [
-                    "keyword-rules"
-                ],
+                "classifierChain": classifier_chain(),
 
                 # No configuration warnings for now
                 "warnings": []
@@ -134,57 +133,8 @@ def create_ticket(req: func.HttpRequest) -> func.HttpResponse:
                 mimetype="application/json"
             )
 
-        # Temporary keyword classification
-        text = f"{title} {description}".lower()
-
-        keyword_map = {
-            "IT Support": [
-                "wifi", "wi-fi", "internet", "password",
-                "login", "computer", "laptop", "printer",
-                "email", "software", "network"
-            ],
-            "Facilities": [
-                "aircond", "air conditioning", "toilet",
-                "light", "electricity", "water", "classroom",
-                "building", "lift", "elevator", "parking"
-            ],
-            "Course Registration": [
-                "course", "subject", "register", "registration",
-                "enrol", "enroll", "add drop", "add/drop",
-                "timetable"
-            ],
-            "Student Finance": [
-                "fee", "fees", "payment", "tuition",
-                "finance", "financial", "refund",
-                "scholarship", "invoice"
-            ],
-            "Library Services": [
-                "library", "book", "borrow", "borrowing",
-                "journal", "library account"
-            ]
-        }
-
-        scores = {}
-        evidence = []
-
-        for category, keywords in keyword_map.items():
-            matched = [
-                keyword
-                for keyword in keywords
-                if keyword in text
-            ]
-
-            scores[category] = len(matched)
-
-            if matched:
-                evidence.extend(matched)
-
-        best_category = max(scores, key=scores.get)
-
-        if scores[best_category] == 0:
-            suggested_category = "General Enquiry"
-        else:
-            suggested_category = best_category
+        classification = classify_ticket(title, description)
+        suggested_category = classification["category"]
 
         # If user manually selected a category, use it.
         # Otherwise use automatic classification.
@@ -211,14 +161,9 @@ def create_ticket(req: func.HttpRequest) -> func.HttpResponse:
             "status": "New",
             "createdAt": datetime.now(timezone.utc).isoformat(),
 
-            # Temporary classifier metadata
-            "classificationMethod": "keyword-rules",
-            "classificationConfidence": (
-                min(scores[best_category] / 3, 1)
-                if scores[best_category] > 0
-                else 0
-            ),
-            "classificationEvidence": list(dict.fromkeys(evidence))
+            "classificationMethod": classification["method"],
+            "classificationConfidence": classification["confidence"],
+            "classificationEvidence": classification["evidence"]
         }
         # Save ticket into Cosmos DB
         save_ticket(ticket)
