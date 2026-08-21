@@ -51,3 +51,5 @@ __queuestorage__
 __tablestorage__
 __azurite_db*__.json
 AzuriteConfig
+
+api/api.env
