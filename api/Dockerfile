@@ -1,3 +1,4 @@
+# create reusable backend img
 FROM mcr.microsoft.com/azure-functions/python:4-python3.11
 
 ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
@@ -6,11 +7,9 @@ ENV AzureWebJobsScriptRoot=/home/site/wwwroot \
 
 WORKDIR /home/site/wwwroot
 
-# Cache dependencies separately
-COPY api/requirements.txt .
+COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy the Azure Functions source: function_app.py, host.json, shared/
-COPY api/ .
+COPY . .
 
 EXPOSE 80

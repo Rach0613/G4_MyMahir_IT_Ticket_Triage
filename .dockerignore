@@ -1,8 +1,0 @@
-.git
-.vscode
-**/__pycache__
-**/*.pyc
-api/.env
-api/local.settings.json
-.env
-api/api.env
