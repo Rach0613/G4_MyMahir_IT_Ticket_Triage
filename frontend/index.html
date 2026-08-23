@@ -900,6 +900,35 @@
       background: var(--success-bg);
       border: 1px solid var(--success-border);
       color: var(--success-text);
+
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      z-index: 1000;
+
+      width: min(440px, calc(100% - 40px));
+      margin: 0;
+      padding: 22px 26px;
+
+      transform: translate(-50%, -50%);
+      text-align: center;
+      font-size: 15px;
+      font-weight: 700;
+
+      box-shadow: 0 20px 60px rgba(20, 25, 50, 0.28);
+      animation: alert-pop-in 0.22s ease-out;
+    }
+
+    @keyframes alert-pop-in {
+      from {
+        opacity: 0;
+        transform: translate(-50%, -46%) scale(0.96);
+      }
+
+      to {
+        opacity: 1;
+        transform: translate(-50%, -50%) scale(1);
+      }
     }
 
     .alert.warning {
@@ -1594,6 +1623,8 @@
       <div
         id="submitAlert"
         class="alert"
+        role="status"
+        aria-live="polite"
       ></div>
 
 
@@ -2366,6 +2397,8 @@
        ALERT HELPER
     ===================================================== */
 
+    let submitAlertTimer;
+
     function showAlert(
       elementId,
       message,
@@ -2380,6 +2413,15 @@
       alert.className =
         `alert show ${type}`;
 
+      if (elementId === "submitAlert" && type === "success") {
+        clearTimeout(submitAlertTimer);
+
+        submitAlertTimer = setTimeout(
+          () => hideAlert(elementId),
+          4000
+        );
+      }
+
     }
 
 
@@ -2387,6 +2429,10 @@
 
       const alert =
         document.getElementById(elementId);
+
+      if (elementId === "submitAlert") {
+        clearTimeout(submitAlertTimer);
+      }
 
       alert.className = "alert";
 

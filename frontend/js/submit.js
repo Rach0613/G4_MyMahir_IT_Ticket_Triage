@@ -1,5 +1,5 @@
 
-import { api, esc, formatDate } from "./api.js";
+import { api, esc, formatDate } from "./api.js?v=20260823-2";
 
 const form = document.getElementById("ticket-form");
 const submitBtn = document.getElementById("submit-btn");

@@ -4,7 +4,7 @@ import {
   formatDate,
   setAdminKey,
   statusClass
-} from "./api.js";
+} from "./api.js?v=20260823-2";
 
 /* =========================================================
    DOM Elements

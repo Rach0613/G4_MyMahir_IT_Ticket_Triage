@@ -51,6 +51,10 @@ async function request(path, options = {}) {
       `${API_BASE}${path}`,
       {
         ...options,
+        // Dashboard data must always reflect the latest Cosmos state. This
+        // also prevents a browser profile from reusing API responses cached
+        // before a deployment.
+        cache: "no-store",
         headers
       }
     );
