@@ -9,6 +9,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from typing import TypedDict
+
+
+class CategoryScore(TypedDict):
+    score: int
+    matched: list[str]
 
 IT_SUPPORT = "IT Support"
 FACILITIES = "Facilities"
@@ -157,9 +163,9 @@ def _compile_ontology() -> dict[str, tuple[tuple[re.Pattern[str], int, str], ...
 _COMPILED_ONTOLOGY = _compile_ontology()
 
 
-def score_text(text: str) -> dict[str, dict[str, object]]:
+def score_text(text: str) -> dict[str, CategoryScore]:
     """Score text against every category and return matched evidence."""
-    results: dict[str, dict[str, object]] = {}
+    results: dict[str, CategoryScore] = {}
     candidate = text or ""
 
     for category, entries in _COMPILED_ONTOLOGY.items():
