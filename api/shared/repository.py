@@ -4,60 +4,49 @@ from azure.cosmos import CosmosClient
 
 from shared.config import (
     KEY_VAULT_URL,
+    COSMOS_ENDPOINT,
+    COSMOS_KEY,
     COSMOS_DATABASE,
     COSMOS_CONTAINER
 )
 
-
-# ==========================================================
-# Azure Authentication
-# ==========================================================
-
-# Use the Azure account that is currently logged in.
-# When running locally, DefaultAzureCredential can use
-# your Azure CLI login ("az login").
-credential = DefaultAzureCredential()
+_container = None
 
 
-# ==========================================================
-# Connect to Azure Key Vault
-# ==========================================================
+def _get_container():
+    """Create the Cosmos client on first database use, not during API startup."""
+    global _container
+    if _container is not None:
+        return _container
 
-secret_client = SecretClient(
-    vault_url=KEY_VAULT_URL,
-    credential=credential
-)
+    if not COSMOS_DATABASE or not COSMOS_CONTAINER:
+        raise RuntimeError(
+            "COSMOS_DATABASE and COSMOS_CONTAINER must be configured."
+        )
 
+    endpoint = COSMOS_ENDPOINT
+    key = COSMOS_KEY
 
-# ==========================================================
-# Retrieve Cosmos DB Credentials from Key Vault
-# ==========================================================
+    # Direct environment settings are the reliable option for an integrated
+    # Static Web Apps API. Keep Key Vault as the secure fallback for local
+    # development or a standalone Function App with managed identity.
+    if not endpoint or not key:
+        if not KEY_VAULT_URL:
+            raise RuntimeError(
+                "Configure COSMOS_ENDPOINT and COSMOS_KEY, or KEY_VAULT_URL."
+            )
+        credential = DefaultAzureCredential()
+        secret_client = SecretClient(
+            vault_url=KEY_VAULT_URL,
+            credential=credential
+        )
+        endpoint = secret_client.get_secret("CosmosEndpoint").value
+        key = secret_client.get_secret("CosmosKey").value
 
-cosmos_endpoint = secret_client.get_secret(
-    "CosmosEndpoint"
-).value
-
-cosmos_key = secret_client.get_secret(
-    "CosmosKey"
-).value
-
-
-# ==========================================================
-# Connect to Azure Cosmos DB
-# ==========================================================
-
-cosmos_client = CosmosClient(
-    cosmos_endpoint,
-    credential=cosmos_key
-)
-
-database = cosmos_client.get_database_client(
-    COSMOS_DATABASE
-)
-
-container = database.get_container_client(
-    COSMOS_CONTAINER
-)
+    cosmos_client = CosmosClient(endpoint, credential=key)
+    database = cosmos_client.get_database_client(COSMOS_DATABASE)
+    _container = database.get_container_client(COSMOS_CONTAINER)
+    return _container
 
 
 # ==========================================================
@@ -67,7 +56,7 @@ container = database.get_container_client(
 def create_ticket(ticket):
 
     # Store the ticket document inside Cosmos DB.
-    return container.create_item(
+    return _get_container().create_item(
         body=ticket
     )
     
@@ -78,7 +67,7 @@ def create_ticket(ticket):
 def get_all_tickets():
 
     # Query all ticket documents from Cosmos DB
-    items = container.query_items(
+    items = _get_container().query_items(
         query="SELECT * FROM c",
         enable_cross_partition_query=True
     )
@@ -107,7 +96,7 @@ def get_ticket_by_id(ticket_id):
     ]
 
     items = list(
-        container.query_items(
+        _get_container().query_items(
             query=query,
             parameters=parameters,
             enable_cross_partition_query=True
@@ -144,7 +133,7 @@ def update_ticket(ticket_id, new_status=None, new_category=None):
     # If category is NOT changing, we can replace normally.
     if not new_category or new_category == old_category:
 
-        return container.replace_item(
+        return _get_container().replace_item(
             item=ticket_id,
             body=ticket
         )
@@ -156,6 +145,7 @@ def update_ticket(ticket_id, new_status=None, new_category=None):
     # simply change it using replace_item().
     # ------------------------------------------------------
 
+    container = _get_container()
     container.delete_item(
         item=ticket_id,
         partition_key=old_category

@@ -19,6 +19,12 @@ COSMOS_DATABASE = os.getenv("COSMOS_DATABASE")
 # Cosmos DB container name
 COSMOS_CONTAINER = os.getenv("COSMOS_CONTAINER")
 
+# Optional direct credentials for environments such as an integrated Azure
+# Static Web Apps API, where the API cannot use the Static Web App's managed
+# identity to read application secrets from Key Vault.
+COSMOS_ENDPOINT = os.getenv("COSMOS_ENDPOINT")
+COSMOS_KEY = os.getenv("COSMOS_KEY")
+
 
 # ==========================================================
 # Azure AI Language Configuration
