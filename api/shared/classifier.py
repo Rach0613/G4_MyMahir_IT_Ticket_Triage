@@ -57,8 +57,12 @@ def _normalise_provider_result(payload: Mapping[str, Any]) -> ClassificationResu
     if not isinstance(evidence, (list, tuple)):
         raise ValueError("Classifier provider evidence must be a list.")
 
+    raw_confidence = payload.get("confidence")
+    if raw_confidence is None:
+        raise ValueError("Classifier provider returned invalid confidence.")
+
     try:
-        confidence = float(payload.get("confidence"))
+        confidence = float(raw_confidence)
     except (TypeError, ValueError) as exc:
         raise ValueError("Classifier provider returned invalid confidence.") from exc
     if not math.isfinite(confidence) or not 0.0 <= confidence <= 1.0:
