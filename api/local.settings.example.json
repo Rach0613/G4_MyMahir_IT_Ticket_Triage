@@ -1,0 +1,14 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "",
+    "FUNCTIONS_WORKER_RUNTIME": "python",
+    "KEY_VAULT_URL": "https://ticket-key-vault.vault.azure.net/",
+    "COSMOS_DATABASE": "<your-cosmos-database-name>",
+    "COSMOS_CONTAINER": "<your-cosmos-container-name>",
+    "AZURE_LANGUAGE_ENDPOINT": "https://<your-language-resource>.cognitiveservices.azure.com",
+    "AZURE_LANGUAGE_KEY": "<set-locally-or-use-a-key-vault-reference>",
+    "AZURE_LANGUAGE_API_VERSION": "2024-11-01",
+    "AZURE_LANGUAGE_TIMEOUT_SECONDS": "6"
+  }
+}
